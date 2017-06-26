@@ -1,4 +1,5 @@
 #include "KMatch.h"
+#include "matchresult.h"
 #include <sys/time.h>
 #include <thread>
 //#include <functional>
@@ -10,12 +11,149 @@ void timed_log(std::string s){
   std::cout<<"TIME_LOG: "<<ms<<" - "<<s<<std::endl;
 };
 
-KMatch::KMatch(char * _target_filename, char * _query_filename, uint8_t _K, int _max_freq){
+KMatch::KMatch(char * _target_filename, char * _query_filename, uint8_t _K, int _max_freq, uint8_t _N, uint8_t _M){
   target_filename=_target_filename;
   query_filename=_query_filename;
   K=_K;
   max_freq=_max_freq;
+  N=_N;
+  M=_M;
 };
+
+void KMatch::insert_kmers_from_seq(std::vector<kmer_position_t> &kposv, const std::string & seq, const uint32_t seq_index) {
+  const uint64_t KMER_MASK=( ((uint64_t)1)<<(K*2) )-1;
+  const uint64_t KMER_FIRSTOFFSET=(K-1)*2;
+  uint64_t kmer_index=kposv.size();
+  const char * s=seq.c_str();
+  kposv.resize(kposv.size()+seq.size()+1-K);//XXX: this could be optimised to at least grow N positions if growth needed, so it doesn't grow in every small sequence
+  int64_t last_unknown=-1;
+  uint64_t fkmer=0,rkmer=0;
+  for (uint64_t p=0;p<seq.size();p++) {
+    //fkmer: grows from the right (LSB)
+    //rkmer: grows from the left (MSB)
+    switch (s[p]) {
+      case 'A':
+      case 'a':
+        fkmer = ((fkmer << 2) + 0) & KMER_MASK;
+            rkmer = (rkmer >> 2) + (((uint64_t) 3) << KMER_FIRSTOFFSET);
+            break;
+      case 'C':
+      case 'c':
+        fkmer = ((fkmer << 2) + 1) & KMER_MASK;
+            rkmer = (rkmer >> 2) + (((uint64_t) 2) << KMER_FIRSTOFFSET);
+            break;
+      case 'G':
+      case 'g':
+        fkmer = ((fkmer << 2) + 2) & KMER_MASK;
+            rkmer = (rkmer >> 2) + (((uint64_t) 1) << KMER_FIRSTOFFSET);
+            break;
+      case 'T':
+      case 't':
+        fkmer = ((fkmer << 2) + 3) & KMER_MASK;
+            rkmer = (rkmer >> 2) + (((uint64_t) 0) << KMER_FIRSTOFFSET);
+            break;
+      default:
+        fkmer = ((fkmer << 2) + 0) & KMER_MASK;
+            rkmer = (rkmer >> 2) + (((uint64_t) 3) << KMER_FIRSTOFFSET);
+            last_unknown = p;
+            break;
+    }
+    //std::cout<<"c="<<s[p]<<" f="<<fkmer<<" r="<<rkmer<<std::endl;
+    //TODO: last unknown passed by?
+    if (last_unknown + K <= p) {
+      /*char cstring[32],fkstring[32],rkstring[32];
+      cstring[K]=0;
+      fkstring[K]=0;
+      rkstring[K]=0;
+      for (int i=0;i<K;i++){
+        cstring[i]=s[p-K+i+1];
+        fkstring[i]='0'+( fkmer >> (2*(K-i-1)) )%4;
+        rkstring[i]='0'+( rkmer >> (2*(K-i-1)) )%4;
+      };
+      std::cout<<"string="<<cstring<<" fkmer="<<fkmer<<" ("<<fkstring<<") rkmer="<<rkmer<<" ("<<rkstring<<")"<<std::endl;*/
+      //result is min(kmer/rkmer), and set position / reverse
+      if (fkmer <= rkmer) {
+        kposv[kmer_index].kmer = fkmer;
+        kposv[kmer_index].position = p - K + 2 +  seq_index * KMATCH_POSITION_CHR_CNST;//1-based position
+      } else {
+        kposv[kmer_index].kmer = rkmer;
+        kposv[kmer_index].position = -(p - K + 2 + seq_index * KMATCH_POSITION_CHR_CNST);//1-based position
+      }
+      kmer_index++;
+    }
+  }
+  kposv.resize(kmer_index);
+}
+
+void KMatch::insert_kmers_from_seq_N_out_of_M(std::vector<kmer_position_t> &kposv, const std::string & seq, const uint32_t seq_index, const char N, const char M) {
+  const uint64_t KMER_MASK=( ((uint64_t)1)<<(K*2) )-1;
+  const uint64_t KMER_FIRSTOFFSET=(K-1)*2;
+  uint64_t kmer_index=kposv.size();
+  const char * s=seq.c_str();
+  kposv.resize(kposv.size()+seq.size()+1-K);//XXX: this could be optimised to at least grow N positions if growth needed, so it doesn't grow in every small sequence
+  int64_t last_unknown[M]={-1};
+  uint64_t fkmer[M]={0};
+  uint64_t rkmer[M]={0};
+  for (uint64_t p=0;p<seq.size();p++) {
+    //fkmer: grows from the right (LSB)
+    //rkmer: grows from the left (MSB)
+    for (auto mi=0;mi<M;++mi) {
+      if ((mi+p)%M<N) {
+        switch (s[p]) {
+          case 'A':
+          case 'a':
+            fkmer[mi] = ((fkmer[mi] << 2) + 0) & KMER_MASK;
+                rkmer[mi] = (rkmer[mi] >> 2) + (((uint64_t) 3) << KMER_FIRSTOFFSET);
+                break;
+          case 'C':
+          case 'c':
+            fkmer[mi] = ((fkmer[mi] << 2) + 1) & KMER_MASK;
+                rkmer[mi] = (rkmer[mi] >> 2) + (((uint64_t) 2) << KMER_FIRSTOFFSET);
+                break;
+          case 'G':
+          case 'g':
+            fkmer[mi] = ((fkmer[mi] << 2) + 2) & KMER_MASK;
+                rkmer[mi] = (rkmer[mi] >> 2) + (((uint64_t) 1) << KMER_FIRSTOFFSET);
+                break;
+          case 'T':
+          case 't':
+            fkmer[mi] = ((fkmer[mi] << 2) + 3) & KMER_MASK;
+                rkmer[mi] = (rkmer[mi] >> 2) + (((uint64_t) 0) << KMER_FIRSTOFFSET);
+                break;
+          default:
+            fkmer[mi] = ((fkmer[mi] << 2) + 0) & KMER_MASK;
+                rkmer[mi] = (rkmer[mi] >> 2) + (((uint64_t) 3) << KMER_FIRSTOFFSET);
+                last_unknown[mi] = p;
+                break;
+        }
+      }
+    }
+    //std::cout<<"c="<<s[p]<<" f="<<fkmer<<" r="<<rkmer<<std::endl;
+    //TODO: last unknown passed by?
+    if (last_unknown[p%M] + K * N / M <= p) {
+      /*char cstring[32],fkstring[32],rkstring[32];
+      cstring[K]=0;
+      fkstring[K]=0;
+      rkstring[K]=0;
+      for (int i=0;i<K;i++){
+        cstring[i]=s[p-K+i+1];
+        fkstring[i]='0'+( fkmer >> (2*(K-i-1)) )%4;
+        rkstring[i]='0'+( rkmer >> (2*(K-i-1)) )%4;
+      };
+      std::cout<<"string="<<cstring<<" fkmer="<<fkmer<<" ("<<fkstring<<") rkmer="<<rkmer<<" ("<<rkstring<<")"<<std::endl;*/
+      //result is min(kmer/rkmer), and set position / reverse
+      if (fkmer[p%M] <= rkmer[p%M]) {
+        kposv[kmer_index].kmer = fkmer[p%M];
+        kposv[kmer_index].position = p - K * N / M + 2 +  seq_index * KMATCH_POSITION_CHR_CNST;//1-based position
+      } else {
+        kposv[kmer_index].kmer = rkmer[p%M];
+        kposv[kmer_index].position = -(p - K * N / M + 2 + seq_index * KMATCH_POSITION_CHR_CNST);//1-based position
+      }
+      kmer_index++;
+    }
+  }
+  kposv.resize(kmer_index);
+}
 
 void KMatch::kmer_array_from_fasta(char * filename, std::vector<kmer_position_t> & kposv, std::vector<seq_attributes_t> & seqnames){
   std::vector<kmer_position_t> karray;
@@ -28,90 +166,33 @@ void KMatch::kmer_array_from_fasta(char * filename, std::vector<kmer_position_t>
   std::pair<uint64_t,bool> ckmer;
   int64_t chr_offset=0;
   uint32_t seq_index=0;
-  uint64_t kmer_index=0;
-  const uint64_t KMER_MASK=( ((uint64_t)1)<<(K*2) )-1;
-  const uint64_t KMER_FIRSTOFFSET=(K-1)*2;
+
+
   std::cout<<"Loading fasta "<<filename<<" into kmer array"<<std::endl;
   seq="";
   while ( 1 ){
     getline (fasta, line);
-    if ( (line.size()>0 && line[0]=='>') || fasta.eof()){
-      if (seq.size()>0) {//There is a previous sequence, process it!
+    if ( (line.size()>0 && line[0]=='>') || fasta.eof()) {
+      if (seq.size() > 0) {//There is a previous sequence, process it!
         //std::cout<<"processing sequence"<<std::endl;
-        seq_attr.length=seq.size();
-        kposv.resize(kposv.size()+seq.size()+1-K);//XXX: this could be optimised to at least grow N positions if growth needed, so it doesn't grow in every small sequence
+        seq_attr.length = seq.size();
         seqnames.push_back(seq_attr);
-        const char * s=seq.c_str();
+        const char *s = seq.c_str();
         //TODO: further speedup? reserve all space first, choose a kmer value as threshold and insert larger kmers fromt the top, smaller or equal from the bottom, sort the two parts (frontier will be the next-insertion point) independently and join them in the filtering step.
-        int64_t last_unknown=-1;
-        uint64_t fkmer=0,rkmer=0;
-        for (uint64_t p=0;p<seq.size();p++){
-          //fkmer: grows from the right (LSB) 
-          //rkmer: grows from the left (MSB)
-          switch (s[p]) {
-            case 'A':
-            case 'a':
-              fkmer=( (fkmer<<2) + 0 ) & KMER_MASK;
-              rkmer=(rkmer>>2) + (((uint64_t) 3)<<KMER_FIRSTOFFSET) ;
-              break;
-            case 'C':
-            case 'c':
-              fkmer=( (fkmer<<2) + 1 ) & KMER_MASK;
-              rkmer=(rkmer>>2) + (((uint64_t) 2)<<KMER_FIRSTOFFSET) ;
-              break;
-            case 'G':
-            case 'g':
-              fkmer=( (fkmer<<2) + 2 ) & KMER_MASK;
-              rkmer=(rkmer>>2) + (((uint64_t) 1)<<KMER_FIRSTOFFSET) ;
-              break;
-            case 'T':
-            case 't':
-              fkmer=( (fkmer<<2) + 3 ) & KMER_MASK;
-              rkmer=(rkmer>>2) + (((uint64_t) 0)<<KMER_FIRSTOFFSET) ;
-              break;
-            default:
-              fkmer=( (fkmer<<2) + 0 ) & KMER_MASK;
-              rkmer=(rkmer>>2) + (((uint64_t) 3)<<KMER_FIRSTOFFSET);
-              last_unknown=p;
-              break;
-          }
-          //std::cout<<"c="<<s[p]<<" f="<<fkmer<<" r="<<rkmer<<std::endl;
-          //TODO: last unknown passed by?
-          if (last_unknown+K<=p){
-            /*char cstring[32],fkstring[32],rkstring[32];
-            cstring[K]=0;
-            fkstring[K]=0;
-            rkstring[K]=0;
-            for (int i=0;i<K;i++){
-              cstring[i]=s[p-K+i+1];
-              fkstring[i]='0'+( fkmer >> (2*(K-i-1)) )%4;
-              rkstring[i]='0'+( rkmer >> (2*(K-i-1)) )%4;
-            };
-            std::cout<<"string="<<cstring<<" fkmer="<<fkmer<<" ("<<fkstring<<") rkmer="<<rkmer<<" ("<<rkstring<<")"<<std::endl;*/
-            //result is min(kmer/rkmer), and set position / reverse
-            if (fkmer<=rkmer){
-              kposv[kmer_index].kmer=fkmer;
-              kposv[kmer_index].position=p-K+2+seq_index*KMATCH_POSITION_CHR_CNST;//1-based position
-            } else {
-              kposv[kmer_index].kmer=rkmer;
-              kposv[kmer_index].position=-(p-K+2+seq_index*KMATCH_POSITION_CHR_CNST);//1-based position
-            }
-          kmer_index++;
-          }/*else if (p>=K){ XXX:review this and make it ok for the start!
-            //result is NOKMER
-            //kposv[kmer_index].kmer=KMATCH_NOKMER;
-            //kposv[kmer_index].position=kmer_index+1;//1-based position
-
-          }*/
-
+        if (N == 0 and M == 0) {
+          insert_kmers_from_seq(kposv, s, seq_index);
+        } else {
+          std::cout << "Inserting skip-mers " << (int) N << " every " << (int) M << " bp" << std::endl;
+          insert_kmers_from_seq_N_out_of_M(kposv, s, seq_index, N, M);
         }
       }
-      if (fasta.eof()){
+
+      if (fasta.eof()) {
         break;
       } else {//init new seq_attributes;
         //std::cout<<"Loading sequence '"<<line<<"'"<<std::endl;
-        seq_attr.name=line;
-        seq="";
+        seq_attr.name = line;
+        seq = "";
         seq_index++;
       }
     }
@@ -120,7 +201,7 @@ void KMatch::kmer_array_from_fasta(char * filename, std::vector<kmer_position_t>
     }
   }
   fasta.close();
-  std::cout<<"Kmer array with "<<kmer_index<<" elements created"<<std::endl;
+  std::cout<<"Kmer array with "<<kposv.size()<<" elements created"<<std::endl;
   timed_log(" Sorting array ");
   std::sort(kposv.begin(),kposv.end());
   std::cout<<"Kmer array sorted"<<std::endl;
@@ -195,11 +276,11 @@ void KMatch::dump_matching_blocks(char * out_filename, int min_length, int max_j
   uint64_t kmsize=kmatches.size();
   std::cout<<"Sorting the matches"<<std::endl;
   std::sort(kmatches.begin(),kmatches.end());//XXX: this needs to be sorted by absolute value!
-  std::cout<<"Dumping matches of "<<min_length-K+1 << " kmers with jumps of up to "<<max_jump<<"kmers to "<<out_filename<<std::endl;
+  std::cout<<"Dumping matches of length "<<min_length<<" with jumps of up to "<<max_jump<<" kmers to "<<out_filename<<std::endl;
   std::ofstream out_file(out_filename);
   int64_t match_start=0;
   int64_t q_delta=0, t_delta=1;//Invalid values, just to make sure.
-  uint64_t dumped=0;
+  uint64_t dumped=0, dumped_length=0;
   std::list<multikmer_match_t> active_matches;
   //MULTI-MATCH: keep a list of "started matches" with q_start, t_start,  last-match
   for (uint64_t i=1;i<=kmsize ;i++){//do not check the last element, check it outside!
@@ -228,6 +309,7 @@ void KMatch::dump_matching_blocks(char * out_filename, int min_length, int max_j
           //std::cout<<" Dumping match (length="<<am->length+K<< ")"<<std::endl;
           //dump!
           t_result r;
+          //std::cout<<"Match starts on "<<am->q_start<<" -> "<<am->t_start<<std::endl;
           r.query_id=am->q_start/KMATCH_POSITION_CHR_CNST-1;//0-based
           r.target_id=am->t_start/KMATCH_POSITION_CHR_CNST-1;//0-based
           r.query_size=query_seqs[r.query_id].length;
@@ -244,6 +326,7 @@ void KMatch::dump_matching_blocks(char * out_filename, int min_length, int max_j
           r.ident=1;
           out_file.write((char *) &r,sizeof(r));
           dumped++;
+          dumped_length+=r.len;
         }
         //delete from matches
         am=active_matches.erase(am);
@@ -260,60 +343,15 @@ void KMatch::dump_matching_blocks(char * out_filename, int min_length, int max_j
       active_matches.push_back(mkm);
       //std::cout<<"NEW match on "<< mkm.q_start <<"->"<<mkm.t_start<<std::endl;
     }
-    
 
-
-
-
-    //TODO: to allow multi-matches just change i-1 for a back-search of the previous link in this match (i.e, go back till position[j] <position-max_jmp and if any point matches, use it to move forward.
-    //TODO: to allow for multi-matches the start register needs to change to a vector with some more variables.
-    //if match breaks in this element
-    /*----------------
-    if (i<kmsize){
-      q_delta=kmatches[i].q_position-kmatches[i-1].q_position;
-      t_delta=kmatches[i].t_position-kmatches[i-1].t_position;
-    }
-    if ( i==kmsize //end condition!
-         || kmatches[i].reverse != kmatches[i-1].reverse //change in direction
-         || q_delta-1>max_jump  //long jump
-         || (kmatches[i].reverse==false && q_delta != t_delta)//direct and not same difference
-         || (kmatches[i].reverse==true && q_delta != -t_delta) ) { //reverse and not same difference 
-
-      //std::cout<<"evaluating match in ["<<match_start<<"-"<<i-1<<"] "<<q_delta<<" "<<t_delta<<" "<<kmatches[i].reverse<<" "<<kmatches[i-1].reverse<<"||"<<(kmatches[i].reverse != kmatches[i-1].reverse)<<" "<<(q_delta-1>max_jump)<<" "<< (kmatches[i].reverse==false && q_delta != t_delta)<<" "<<(kmatches[i].reverse==true && q_delta != -t_delta)<<std::endl;
-      //length>min_length?
-      if (i-match_start>=min_length-K){
-        //TODO:dump
-        t_result r;
-        r.query_id=kmatches[match_start].q_position/KMATCH_POSITION_CHR_CNST-1;//0-based
-        r.target_id=kmatches[match_start].t_position/KMATCH_POSITION_CHR_CNST-1;//0-based
-        r.query_size=query_seqs[r.query_id].length;
-        //XXX:review position and K displacement when reverse, etc
-        r.qstart=kmatches[match_start].q_position%KMATCH_POSITION_CHR_CNST-1;//0-based
-        if (kmatches[match_start].reverse) {
-          r.tstart=kmatches[i-1].t_position%KMATCH_POSITION_CHR_CNST-1;//0-based
-        } else {
-          r.tstart=kmatches[match_start].t_position%KMATCH_POSITION_CHR_CNST-1;//0-based
-        }
-        r.len=kmatches[i-1].q_position - kmatches[match_start].q_position+K;
-        r.reverse=kmatches[match_start].reverse;
-        r.prob=1;
-        r.ident=1;
-        out_file.write((char *) &r,sizeof(r));
-        dumped++;
-        //std::cout<<"Match dumped! "<<r.query_id<<"["<<r.qstart<<":"<<r.qstart+r.len<<"] -> "<<r.target_id<<"["<<r.tstart<<":"<<r.tstart+r.len<<"]"<<std::endl;
-      }
-      //move match start
-      match_start=i;
-    }
-  ----------*/
   }
   out_file.close();
-  std::cout<<dumped<<" matches dumped"<<std::endl;
+  std::cout<<dumped<<" matches over "<<dumped_length<<"bp dumped "<<std::endl;
 }
 
 int main(int argc, char ** argv){
-  if (argc!=8) {
-    std::cout<<"Usage: "<<argv[0]<<" query.fa target.fa K output.fa min_length jump max_freq"<<std::endl;
+  if (argc!=10) {
+    std::cout<<"Usage: "<<argv[0]<<" query.fa target.fa K output.fa min_length jump max_freq N M"<<std::endl;
     return -1;
   }
   
@@ -322,7 +360,7 @@ int main(int argc, char ** argv){
     return 1;
   }
   //timed_log(" START ");
-  KMatch kmatch(argv[2],argv[1],atoi(argv[3]),atoi(argv[7]));
+  KMatch kmatch(argv[2],argv[1],atoi(argv[3]),atoi(argv[7]),atoi(argv[8]),atoi(argv[9]));
   //timed_log(" load_positions() ");
   std::thread q(&KMatch::load_query_positions,std::ref(kmatch));
   std::thread t(&KMatch::load_target_positions,std::ref(kmatch));

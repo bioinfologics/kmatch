@@ -14,8 +14,8 @@
 
 int main(int argc, char ** argv){
 
-  if (argc!=3) {
-    std::cout<<"Usage: "<<argv[0]<<" kmatch_output_file match_files_prefix"<<std::endl;
+  if (argc!=4) {
+    std::cout<<"Usage: "<<argv[0]<<" kmatch_output_file match_files_prefix chr_offset"<<std::endl;
     return -1;
   }
 
@@ -27,10 +27,11 @@ int main(int argc, char ** argv){
   coord_file<<"name, seq1, seq2"<<std::endl;
   while (!result_file.read((char *) &r,sizeof(r)).eof()){
     lst_file<<r.query_id<<" "<<r.target_id<<" "<<r.query_size<<" "<<r.qstart<<" "<<r.tstart<<" "<<r.len<<" "<<r.reverse<<" "<<r.prob<<" "<<r.ident<<std::endl;
+    uint64_t mid2=0;
     for(auto offset=0;offset<r.len;offset+=1000){
-      coord_file<<"M"<<mid++<<","<<r.qstart+offset<<","<<r.tstart+(r.reverse ? -offset:offset)<<std::endl;
+      coord_file<<"M"<<mid<<"-"<<mid2++<<","<<r.query_id*atoi(argv[3])+r.qstart+offset<<","<<r.target_id*atoi(argv[3])+r.tstart+(r.reverse ? -offset:offset)<<std::endl;
     }
-
+    mid++;
   }
   result_file.close();
 }

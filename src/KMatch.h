@@ -52,18 +52,20 @@ inline int64_t str_to_kmer(const char * _str); //returns a canonical kmer with s
 
 class KMatch {
   public:
-    KMatch(char * _target_filename, char * _query_filename, uint8_t _K, int _max_freq);
+    KMatch(char * _target_filename, char * _query_filename, uint8_t _K, int _max_freq, uint8_t N, uint8_t M);
     void load_query_positions();
     void load_target_positions();
     void merge_positions();
     void clear_positions();
     void dump_matching_blocks(char * out_filename, int min_length, int max_gap);
   private:
-    uint8_t K;
+    uint8_t K,N,M;
     char * target_filename;
     char * query_filename;
     int max_freq;
     void kmer_array_from_fasta(char * filename, std::vector<kmer_position_t> & kposv, std::vector<seq_attributes_t> & seqnames);
+    void insert_kmers_from_seq(std::vector<kmer_position_t> & kposv,const std::string & seq, const uint32_t seq_index);
+    void insert_kmers_from_seq_N_out_of_M(std::vector<kmer_position_t> &kposv, const std::string & seq, const uint32_t seq_index, const char N, const char M);
     
     std::vector<seq_attributes_t> target_seqs, query_seqs;
     std::vector<kmer_position_t> target_positions, query_positions;
